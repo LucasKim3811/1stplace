@@ -1,0 +1,13 @@
+# Core
+httpx==0.27.2
+pydantic==2.9.2
+
+# Optional (handy for later integration; safe to keep)
+fastapi==0.115.0
+uvicorn==0.30.6
+
+# If you later add queues/db/storage:
+# celery==5.4.0
+# redis==5.0.8
+# boto3==1.35.12
+# psycopg2-binary==2.9.9

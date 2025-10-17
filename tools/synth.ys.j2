@@ -1,0 +1,39 @@
+# tools/synth.ys.j2
+# Jinja2 template rendered by the worker before running Yosys.
+# Variables expected:
+#   {{ top_module }}       : top module name
+#   {{ abc_delay_ps }}     : target delay in picoseconds for 'abc -D'
+#   {{ abc_script }}       : abc script name, e.g. "resyn2" (optional)
+
+# Ensure output dirs exist (worker should also mkdir -p synth reports)
+# Yosys itself won't create directories; rely on worker to prep:
+#   mkdir -p synth reports
+
+# ----- Read RTL -----
+read_verilog -sv rtl/*.v
+hierarchy -check -top {{ top_module }}
+
+# ----- Common passes -----
+proc; opt
+fsm; opt
+memory -nomap; opt
+techmap; opt
+
+# ----- ABC mapping with timing goal -----
+# '-D' is target delay in picoseconds. Example: 2.0 ns => 2000 ps
+# If you pass an abc script, use it; otherwise ABC's default flow is used.
+{% if abc_script %}
+abc -D {{ abc_delay_ps }} -script {{ abc_script }}
+{% else %}
+abc -D {{ abc_delay_ps }}
+{% endif %}
+
+opt_clean -purge
+
+# ----- Reports -----
+# Text stats (easy to eyeball) and JSON stats (easy to parse)
+tee -o reports/yosys_stat.txt stat
+stat -json > reports/yosys_stat.json
+
+# ----- Netlist -----
+write_verilog -noattr synth/netlist.v

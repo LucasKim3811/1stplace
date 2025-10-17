@@ -1,0 +1,27 @@
+# tools/Dockerfile.eda
+# EDA runner image: Yosys/ABC, Verilator + cocotb/pytest, OpenSTA
+# Works well on Ubuntu 22.04. Keep this image separate from your API/worker if you want.
+
+FROM ubuntu:22.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential git make cmake curl ca-certificates pkg-config \
+    python3 python3-pip python3-venv \
+    tcl tk \
+    yosys verilator opensta iverilog \
+    && rm -rf /var/lib/apt/lists/*
+
+# Python toolchain for testing & parsing
+RUN pip3 install --no-cache-dir \
+    cocotb pytest vcdvcd jinja2 unidiff
+
+# Create non-root user (safer)
+RUN useradd -ms /bin/bash eda
+USER eda
+
+# Workspace layout: worker will mount a job dir under /work
+WORKDIR /work
+
+# Convenience: default entry is bash; the worker sets the command it needs.
+ENTRYPOINT ["/bin/bash"]

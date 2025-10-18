@@ -1,0 +1,67 @@
+# tools/sta.tcl.j2
+# Jinja2 template rendered by the worker before running OpenSTA.
+# Variables expected:
+#   {{ lib_path }}           : path to .lib timing library (ASIC) or simplified lib
+#   {{ netlist_path }}       : synthesized gate-level Verilog
+#   {{ top_module }}         : top design name
+#   {{ clock_port }}         : clock input port (default "clk")
+#   {{ clock_name }}         : clock name (default "clk")
+#   {{ clock_period_ns }}    : target clock period in ns (e.g., 2.000 for 500 MHz)
+#   {{ input_delay_ns }}     : small input delay (default 0.10)
+#   {{ output_delay_ns }}    : small output delay (default 0.10)
+#
+# The script generates two parse-friendly files:
+#   reports/sta_checks.txt   : detailed path checks
+#   reports/sta_summary.txt  : contains period, WNS, and TNS lines
+
+# Prepare report dir (worker also mkdir -p reports)
+file mkdir reports
+
+# --- Read library & netlist ---
+read_liberty {{ lib_path }}
+read_verilog {{ netlist_path }}
+link_design {{ top_module }}
+
+# --- Clocks & basic constraints ---
+create_clock -name {{ clock_name|default("clk") }} -period {{ clock_period_ns }} [get_ports {{ clock_port|default("clk") }}]
+set_propagated_clock [get_clocks {{ clock_name|default("clk") }}]
+
+# Simple I/O delays to avoid ideal timing; tweak if you have IO models
+set_input_delay  {{ input_delay_ns|default(0.10) }}  -clock [get_clocks {{ clock_name|default("clk") }}] [all_inputs]
+set_output_delay {{ output_delay_ns|default(0.10) }} -clock [get_clocks {{ clock_name|default("clk") }}] [all_outputs]
+
+# Optional drive/load examples (commented):
+# set_driving_cell -lib_cell INVX1 [all_inputs]
+# set_load 0.1 [all_outputs]
+
+# --- Reports ---
+# Full timing checks (human + machine readable)
+redirect -file reports/sta_checks.txt {
+  report_checks -path full -fields {slew cap input_pins nets fanout} -digits 3
+}
+
+# WNS/TNS summaries
+redirect -file reports/sta_wns.txt { report_wns }
+redirect -file reports/sta_tns.txt { report_tns }
+
+# A concise summary your parser can read easily
+set fp [open "reports/sta_summary.txt" "w"]
+puts $fp "CLOCK_PERIOD_NS={{ clock_period_ns }}"
+# Grab first line numbers from wns/tns files
+set wns 0.0
+set tns 0.0
+if {[file exists "reports/sta_wns.txt"]} {
+  set f [open "reports/sta_wns.txt" "r"]; set data [read $f]; close $f
+  # report_wns prints e.g., "wns 0.123"
+  if {[regexp {(-?\d+(\.\d+)?)$} [string trim [lindex [split $data "\n"] 0]] -> num]} { set wns $num }
+}
+if {[file exists "reports/sta_tns.txt"]} {
+  set f [open "reports/sta_tns.txt" "r"]; set data [read $f]; close $f
+  # report_tns prints e.g., "tns 0.456"
+  if {[regexp {(-?\d+(\.\d+)?)$} [string trim [lindex [split $data "\n"] 0]] -> num]} { set tns $num }
+}
+puts $fp "WNS_NS=$wns"
+puts $fp "TNS_NS=$tns"
+close $fp
+
+exit

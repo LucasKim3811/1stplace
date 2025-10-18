@@ -1,0 +1,30 @@
+version: "3.8"
+
+services:
+  orchestrator:
+    build:
+      context: ../orchestrator
+      dockerfile: Dockerfile
+    environment:
+      HF_TOKEN: ${HF_TOKEN}
+      # If you host models on HF endpoints, set *_URL here; otherwise leave blank to use public API
+      PLANNER_MODEL: "mistralai/Mistral-7B-Instruct-v0.3"
+      PROGRAMMER_MODEL: "deepseek-ai/deepseek-coder-6.7b-instruct"
+      REVIEWER_MODEL:  "mistralai/Mistral-7B-Instruct-v0.3"
+      EVALUATOR_MODEL: "mistralai/Mistral-7B-Instruct-v0.3"
+    ports: ["8000:8000"]
+
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    env_file:
+      - ./config.env.example   # copy to .env and switch to that in real use
+    environment:
+      ORCH_BASE_URL: http://orchestrator:8000
+    volumes:
+      - ../tools:/app/tools
+      - worker_data:/data
+
+volumes:
+  worker_data:

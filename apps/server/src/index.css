@@ -1,0 +1,87 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Definition of the design system. All colors, gradients, fonts, etc should be defined here. 
+All colors MUST be HSL.
+*/
+
+@layer base {
+  :root {
+    /* Snapdragon Performance Theme - Base Colors */
+    --background: 0 0% 4%;              /* #0A0A0A - deep black */
+    --background-secondary: 0 0% 8%;    /* #141414 - slightly lighter black */
+    --background-tertiary: 0 0% 12%;    /* #1F1F1F - hover states */
+    --foreground: 0 0% 98%;             /* #FAFAFA - crisp white */
+
+    /* Card & Panel Colors */
+    --card: 0 0% 8%;                    /* #141414 */
+    --card-foreground: 0 0% 98%;        /* #FAFAFA */
+
+    --popover: 0 0% 8%;
+    --popover-foreground: 0 0% 98%;
+
+    /* Primary Accent - Neon Red */
+    --primary: 0 100% 60%;              /* #FF3333 - vibrant red */
+    --primary-foreground: 0 0% 4%;      /* dark background for contrast */
+
+    /* Secondary Accent - Electric Orange */
+    --secondary: 15 100% 55%;           /* #FF5722 - performance orange */
+    --secondary-foreground: 0 0% 98%;
+
+    /* Muted/Subtle Colors */
+    --muted: 0 0% 12%;                  /* #1F1F1F */
+    --muted-foreground: 0 0% 60%;       /* #999999 - neutral gray */
+
+    /* Accent Colors */
+    --accent: 0 100% 60%;               /* neon red accent */
+    --accent-foreground: 0 0% 4%;
+
+    /* Status Colors */
+    --success: 120 100% 40%;            /* #00CC00 - bright green */
+    --warning: 38 100% 55%;             /* #FFB800 - amber */
+    --destructive: 0 100% 60%;          /* #FF3333 - red */
+    --info: 200 100% 50%;               /* #00CCFF - cyan */
+
+    /* Text Colors */
+    --text-secondary: 0 0% 70%;         /* #B3B3B3 */
+    --text-tertiary: 0 0% 50%;          /* #808080 */
+    --text-disabled: 0 0% 35%;          /* #595959 */
+
+    /* Borders & UI Elements */
+    --border: 0 0% 15%;                 /* #262626 - subtle */
+    --border-active: 0 100% 60%;        /* #FF3333 - bright on focus */
+    --input: 0 0% 12%;
+    --ring: 0 100% 60%;                 /* red focus ring */
+
+    --radius: 0.5rem;
+
+    /* Syntax Highlighting */
+    --syntax-keyword: 0 100% 60%;       /* red */
+    --syntax-type: 280 100% 70%;        /* magenta */
+    --syntax-string: 120 100% 40%;      /* green */
+    --syntax-number: 38 100% 55%;       /* orange */
+    --syntax-comment: 0 0% 50%;         /* muted gray */
+    --syntax-function: 200 100% 50%;    /* cyan */
+
+    /* Sidebar */
+    --sidebar-background: 0 0% 4%;
+    --sidebar-foreground: 0 0% 98%;
+    --sidebar-primary: 0 100% 60%;
+    --sidebar-primary-foreground: 0 0% 4%;
+    --sidebar-accent: 0 0% 8%;
+    --sidebar-accent-foreground: 0 0% 98%;
+    --sidebar-border: 0 0% 15%;
+    --sidebar-ring: 0 100% 60%;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+
+  body {
+    @apply bg-background text-foreground;
+  }
+}

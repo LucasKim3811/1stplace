@@ -142,6 +142,20 @@ async def planner(body: Dict[str, Any]):
 @app.post("/programmer", response_model=ProgrammerOut)
 async def programmer(body: Dict[str, Any]):
     if MOCK_ORCH:
+        # Produce a simple patch that appends a comment to the first Verilog file
+        files: Dict[str, str] = body.get("files", {})
+        vpaths = [p for p in files.keys() if p.endswith(".v")]
+        if vpaths:
+            vpath = vpaths[0]
+            before = files[vpath]
+            after = before + "\n// MOCK PATCH APPLIED\n"
+            udiff = "\n".join(
+                __import__("difflib").unified_diff(
+                    before.splitlines(), after.splitlines(),
+                    fromfile=f"a/{vpath}", tofile=f"b/{vpath}"
+                )
+            )
+            return ProgrammerOut(patches=[{"path": vpath, "unified_diff": udiff}], synth_script_patch=None)
         return ProgrammerOut(patches=[], synth_script_patch=None)
     sys, usr = programmer_prompt(body["files"], body["candidate"])
     text = await openai_chat(PROGRAMMER_MODEL, sys, usr, temperature=0.1, max_tokens=2200)

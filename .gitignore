@@ -1,0 +1,25 @@
+# Dependencies
+node_modules/
+.venv/
+.env
+.env.*
+__pycache__/
+dist/
+build/
+.next/
+.out/
+.cache/
+
+# Editors
+.vscode/
+.idea/
+
+# Logs
+npm-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+*.log
+
+# OS
+.DS_Store
+Thumbs.db

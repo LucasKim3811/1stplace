@@ -1,5 +1,5 @@
 from __future__ import annotations
-import os, time, json, difflib, tempfile
+import os, time, json, difflib, tempfile, subprocess, shutil
 from pathlib import Path
 from typing import Dict, Any, List
 import requests
@@ -22,9 +22,15 @@ MAX_PARALLEL      = int(os.getenv("MAX_PARALLEL", "2"))
 DEFAULT_CLOCK     = os.getenv("DEFAULT_CLOCK_PORT", "clk")
 DEFAULT_FREQ_MHZ  = float(os.getenv("DEFAULT_FREQ_MHZ", "500"))
 
-LIB_PATH = Path(os.getenv("LIB_PATH", "/app/tools/sky130.lib"))  # replace if you have one; not strictly required for MVP
+LIB_PATH = Path(os.getenv("LIB_PATH", "/app/tools/sky130.lib"))  # If missing, we skip OpenSTA gracefully
 
 DATA_ROOT.mkdir(parents=True, exist_ok=True)
+
+SMOKE_MODE = os.getenv("SMOKE_MODE", "0") == "1"
+SMOKE_VERILOG = os.getenv("SMOKE_VERILOG", "module top(input clk); endmodule")
+SMOKE_TOP = os.getenv("SMOKE_TOP", "top")
+SMOKE_FREQ = float(os.getenv("SMOKE_FREQ_MHZ", str(DEFAULT_FREQ_MHZ)))
+SMOKE_SAVE_DIR = os.getenv("SMOKE_SAVE_DIR", "")  # if set, copy workspace here for inspection
 
 # --------- Helpers ----------
 def get_queued_job() -> Dict[str, Any] | None:
@@ -58,6 +64,39 @@ def unified_diff(before: str, after: str, fname: str) -> str:
         before.splitlines(), after.splitlines(), fromfile=f"a/{fname}", tofile=f"b/{fname}"
     ))
 
+def apply_unified_diff(job_dir: Path, diff_text: str) -> tuple[bool, str]:
+    """Apply a unified diff using the system 'patch' tool.
+    Returns (ok, log). Uses -p1 to strip leading a/ and b/ prefixes.
+    """
+    try:
+        # Ensure patch tool exists
+        rc = subprocess.run(["patch", "--version"], capture_output=True, text=True)
+        if rc.returncode != 0:
+            return False, f"'patch' tool not available: {rc.stderr}"
+
+        with tempfile.NamedTemporaryFile(mode="w", delete=False, suffix=".patch") as tf:
+            tf.write(diff_text)
+            patch_path = tf.name
+
+        # Dry run first
+        dry = subprocess.run(
+            ["patch", "-p1", "--forward", "--dry-run", "-i", patch_path],
+            cwd=str(job_dir), capture_output=True, text=True
+        )
+        if dry.returncode != 0:
+            return False, f"patch dry-run failed: {dry.stdout}\n{dry.stderr}"
+
+        # Real apply
+        real = subprocess.run(
+            ["patch", "-p1", "--forward", "-i", patch_path],
+            cwd=str(job_dir), capture_output=True, text=True
+        )
+        if real.returncode != 0:
+            return False, f"patch apply failed: {real.stdout}\n{real.stderr}"
+        return True, real.stdout
+    except Exception as e:
+        return False, f"patch exception: {e}"
+
 # --------- Core loop ----------
 def process_job(job: Dict[str, Any]):
     job_id = job["job_id"]
@@ -71,19 +110,39 @@ def process_job(job: Dict[str, Any]):
 
     with tempfile.TemporaryDirectory(dir=DATA_ROOT) as tmp:
         work = Path(tmp)
+        if SMOKE_MODE:
+            print(f"[SMOKE] Workspace: {work}")
         # Stage design files
+        if SMOKE_MODE:
+            print("[SMOKE] Preparing workspace...")
         prepare_workspace(work, rtl_text, top)
         # Render EDA scripts
+        if SMOKE_MODE:
+            print("[SMOKE] Rendering synth.ys...")
         render_synth(top, freq_mhz, abc_script=spec.get("abc_script","resyn2"), out_path=work/"synth.ys")
         period_ns = 1000.0 / freq_mhz
-        render_sta(LIB_PATH, work/"synth/netlist.v", top, DEFAULT_CLOCK, period_ns, out_path=work/"scripts/sta.tcl")
+        if LIB_PATH.exists():
+            if SMOKE_MODE:
+                print(f"[SMOKE] Rendering STA script using {LIB_PATH}...")
+            render_sta(LIB_PATH, work/"synth/netlist.v", top, DEFAULT_CLOCK, period_ns, out_path=work/"scripts/sta.tcl")
+        else:
+            if SMOKE_MODE:
+                print("[SMOKE] No LIB_PATH found; will skip OpenSTA.")
 
         # ------ Baseline ------
+        if SMOKE_MODE:
+            print("[SMOKE] Running baseline: pytest, yosys, (optional) opensta...")
         sim = run_verilator_pytest(work)
         yos = run_yosys(work)
-        sta = run_opensta(work)
+        # OpenSTA optional if no liberty file present
+        if LIB_PATH.exists():
+            _ = run_opensta(work)
+            sta_sum  = parse_sta_summary(work/"reports"/"sta_summary.txt")
+        else:
+            sta_sum = {"clock_period_ns": None, "wns_ns": None, "tns_ns": None, "fmax_mhz": targets.get("frequency_mhz")}
         yos_stat = parse_yosys_stat(work/"reports"/"yosys_stat.json", work/"reports"/"yosys_stat.txt")
-        sta_sum  = parse_sta_summary(work/"reports"/"sta_summary.txt")
+        if SMOKE_MODE:
+            print(f"[SMOKE] Baseline sim pass={sim['pass']} cells={yos_stat['cell_count']} fmax={sta_sum.get('fmax_mhz')}")
         power    = power_proxy_from_vcd(Path(sim.get("vcd") or ""), yos_stat["cell_count"], sta_sum.get("fmax_mhz"))
 
         best = {
@@ -122,48 +181,96 @@ def process_job(job: Dict[str, Any]):
             "logs_tail": (yos["err"] or "")[-240:]
         })
 
-        # ------ Iterations ------
+    # ------ Iterations ------
         for it in range(1, max_iters+1):
             # Planner
+            if SMOKE_MODE:
+                print(f"[SMOKE] Iteration {it}: planner...")
             plan = call_orch("/planner", {
                 "targets": targets,
                 "last_result": best
             })
             cands = plan["candidates"][:parallel] if plan.get("candidates") else []
+            if SMOKE_MODE:
+                print(f"[SMOKE] planner candidates={len(cands)}")
 
             improved = False
             for cand in cands:
                 # Programmer
+                if SMOKE_MODE:
+                    print("[SMOKE] programmer...")
                 files = {
                     f"rtl/{top}.v": (work/"rtl"/f"{top}.v").read_text(),
                     "synth.ys": (work/"synth.ys").read_text()
                 }
                 prog = call_orch("/programmer", {"files": files, "candidate": cand})
                 # Reviewer
+                if SMOKE_MODE:
+                    print("[SMOKE] reviewer...")
                 rev  = call_orch("/reviewer", {"programmer_json": prog})
                 if not rev.get("ok"):
+                    if SMOKE_MODE:
+                        print("[SMOKE] reviewer rejected; skipping candidate")
                     continue
 
-                # Apply patch: MVP approach = overwrite if programmer returns full content in diff,
-                # or skip and just re-run (you can implement a proper unified-diff apply using 'unidiff' lib).
-                before = (work/"rtl"/f"{top}.v").read_text()
-                after  = before  # replace with actual patched content if you apply diff
-                (work/"rtl"/f"{top}.v").write_text(after)
-                udiff = unified_diff(before, after, f"{top}.v")
+                # Apply patches (unified diffs) if provided
+                diffs_applied: List[Dict[str, str]] = []
+                # 1) RTL patches
+                for p in prog.get("patches", []) or []:
+                    diff_text = p.get("unified_diff") or ""
+                    if not diff_text.strip():
+                        continue
+                    ok, log = apply_unified_diff(work, diff_text)
+                    if SMOKE_MODE:
+                        print(f"[SMOKE] apply patch ok={ok}")
+                    if ok:
+                        # Try to compute a diff for the path field if we can
+                        path_val = p.get("path", "")
+                        try:
+                            rel_path = path_val.replace("rtl/", f"rtl/") if path_val else f"rtl/{top}.v"
+                            fpath = work / rel_path
+                            if fpath.exists():
+                                after = fpath.read_text()
+                                # We can't easily reconstruct 'before' now; include raw unified diff
+                                diffs_applied.append({"path": rel_path, "unified_diff": diff_text})
+                            else:
+                                diffs_applied.append({"path": rel_path, "unified_diff": diff_text})
+                        except Exception:
+                            diffs_applied.append({"path": path_val or f"rtl/{top}.v", "unified_diff": diff_text})
+                    else:
+                        # If patch failed, skip this candidate
+                        continue
+
+                # 2) synth.ys patch (if any)
+                synth_patch = prog.get("synth_script_patch")
+                if synth_patch and str(synth_patch).strip():
+                    ok, log = apply_unified_diff(work, synth_patch)
+                    # If synth patch fails, keep going with previous synth.ys
 
                 # Re-render scripts in case the candidate changed constraints
                 render_synth(top, freq_mhz, abc_script=cand.get("params",{}).get("script","resyn2"), out_path=work/"synth.ys")
-                render_sta(LIB_PATH, work/"synth/netlist.v", top, DEFAULT_CLOCK, period_ns, out_path=work/"scripts/sta.tcl")
+                if LIB_PATH.exists():
+                    render_sta(LIB_PATH, work/"synth/netlist.v", top, DEFAULT_CLOCK, period_ns, out_path=work/"scripts/sta.tcl")
 
                 # Evaluate
+                if SMOKE_MODE:
+                    print("[SMOKE] evaluate: pytest -> yosys -> (optional) opensta...")
                 sim = run_verilator_pytest(work)
                 if not sim["pass"]:
+                    if SMOKE_MODE:
+                        print("[SMOKE] sim failed; skipping candidate")
                     continue
                 yos = run_yosys(work)
-                sta = run_opensta(work)
+                if LIB_PATH.exists():
+                    _ = run_opensta(work)
                 yos_stat = parse_yosys_stat(work/"reports"/"yosys_stat.json", work/"reports"/"yosys_stat.txt")
-                sta_sum  = parse_sta_summary(work/"reports"/"sta_summary.txt")
+                if LIB_PATH.exists():
+                    sta_sum  = parse_sta_summary(work/"reports"/"sta_summary.txt")
+                else:
+                    sta_sum = {"clock_period_ns": None, "wns_ns": None, "tns_ns": None, "fmax_mhz": freq_mhz}
                 power    = power_proxy_from_vcd(Path(sim.get("vcd") or ""), yos_stat["cell_count"], sta_sum.get("fmax_mhz"))
+                if SMOKE_MODE:
+                    print(f"[SMOKE] candidate fmax={sta_sum.get('fmax_mhz')} cells={yos_stat['cell_count']}")
 
                 cand_best = {
                     "functional_pass": True,
@@ -192,7 +299,7 @@ def process_job(job: Dict[str, Any]):
                         "iteration": it,
                         "best_result": best,
                         "optimized_verilog": (work/"rtl"/f"{top}.v").read_text(),
-                        "diffs": [{"path": f"rtl/{top}.v", "unified_diff": udiff}],
+                        "diffs": diffs_applied,
                         "charts": charts,
                         "insights": [{"title":"Candidate accepted",
                                       "detail": f"Applied {cand.get('transform')} with params {cand.get('params',{})}"}],
@@ -200,7 +307,7 @@ def process_job(job: Dict[str, Any]):
                             "netlist_path": str(work/"synth"/"netlist.v"),
                             "reports": {
                                 "yosys_stat": str(work/"reports"/"yosys_stat.txt"),
-                                "opensta": str(work/"reports"/"sta_summary.txt"),
+                                "opensta": str(work/"reports"/"sta_summary.txt") if LIB_PATH.exists() else "",
                                 "verilator": "pytest.log"
                             },
                             "wave_vcd": sim.get("vcd") or "",
@@ -217,9 +324,47 @@ def process_job(job: Dict[str, Any]):
             })
             if ev.get("stop") or not improved:
                 post_update(job_id, {"state": "succeeded", "logs_tail": "completed"})
+                # Persist workspace for smoke-mode debugging if requested
+                if SMOKE_SAVE_DIR:
+                    try:
+                        dest = Path(SMOKE_SAVE_DIR) / f"{job_id}"
+                        dest.parent.mkdir(parents=True, exist_ok=True)
+                        shutil.copytree(work, dest, dirs_exist_ok=True)
+                        print(f"[SMOKE] Saved workspace to {dest}")
+                    except Exception as e:
+                        print(f"[SMOKE] Save workspace failed: {e}")
                 return
 
 def main():
+    # Optional one-off smoke run without Supabase polling
+    if SMOKE_MODE:
+        job = {
+            "job_id": "local-smoke",
+            "spec": {
+                "top_module": SMOKE_TOP,
+                "targets": {"frequency_mhz": SMOKE_FREQ},
+                "budgets": {"max_iters": 1, "max_parallel": 1},
+                "original_verilog": SMOKE_VERILOG,
+            },
+        }
+        print("[SMOKE] Running one-off local job...")
+        # Wait for orchestrator readiness briefly
+        try:
+            for i in range(20):
+                try:
+                    requests.get(ORCH + "/healthz", timeout=2)
+                    break
+                except Exception:
+                    time.sleep(0.5)
+        except Exception:
+            pass
+        try:
+            process_job(job)
+            print("[SMOKE] Completed")
+        except Exception as e:
+            print("[SMOKE] Failed:", e)
+        return
+
     while True:
         job = get_queued_job()
         if job:

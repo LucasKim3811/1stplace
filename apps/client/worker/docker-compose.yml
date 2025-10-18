@@ -1,5 +1,3 @@
-version: "3.8"
-
 services:
   orchestrator:
     build:
@@ -12,18 +10,20 @@ services:
       PROGRAMMER_MODEL: "deepseek-ai/deepseek-coder-6.7b-instruct"
       REVIEWER_MODEL:  "mistralai/Mistral-7B-Instruct-v0.3"
       EVALUATOR_MODEL: "mistralai/Mistral-7B-Instruct-v0.3"
-    ports: ["8000:8000"]
+      MOCK_ORCH: "1"  # enable orchestrator mock mode for local smoke tests
+    ports:
+      - "8000:8000"
 
   worker:
     build:
       context: .
       dockerfile: Dockerfile
     env_file:
-      - ./config.env.example   # copy to .env and switch to that in real use
+      - ./.env   # use your local overrides; copy from config.env.example
     environment:
       ORCH_BASE_URL: http://orchestrator:8000
     volumes:
-      - ../tools:/app/tools
+      - ../tools:/tools
       - worker_data:/data
 
 volumes:

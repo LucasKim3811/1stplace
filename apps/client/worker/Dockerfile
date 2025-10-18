@@ -2,10 +2,12 @@
 FROM ubuntu:22.04
 
 ENV DEBIAN_FRONTEND=noninteractive
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential git make cmake curl ca-certificates pkg-config \
     python3 python3-pip python3-venv \
-    tcl tk \
+    tcl tk patch \
     yosys verilator opensta iverilog \
     && rm -rf /var/lib/apt/lists/*
 

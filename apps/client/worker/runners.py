@@ -4,7 +4,12 @@ from pathlib import Path
 from typing import Dict, Any
 from jinja2 import Environment, FileSystemLoader
 
-TOOLS_DIR = Path(__file__).resolve().parent.parent / "tools"
+# Prefer mounted /tools; fallback to repo-relative tools dir
+TOOLS_DIR_CANDIDATES = [
+    Path(os.getenv("TOOLS_DIR", "/tools")),
+    Path(__file__).resolve().parent.parent / "tools",
+]
+TOOLS_DIR = next((p for p in TOOLS_DIR_CANDIDATES if p.exists()), TOOLS_DIR_CANDIDATES[-1])
 
 def run(cmd: str, cwd: Path, timeout: int = 900) -> tuple[int, str, str]:
     p = subprocess.run(cmd, cwd=str(cwd), shell=True, capture_output=True, text=True, timeout=timeout)
